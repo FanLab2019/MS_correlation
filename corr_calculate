@@ -1,0 +1,171 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jul 15 07:35:25 2021
+
+@author: Duran Bao
+"""
+
+###############################################################
+#####   OUTPUTS for correlations of Target MS data   ##########
+###############################################################
+# pip install pymzml
+import os
+import pymzml
+import numpy as np
+import pandas as pd
+import math
+import scipy
+import seaborn as sb
+from scipy import stats
+import scipy.stats as stats
+from scipy import signal
+
+
+'''
+filelst = ['1. blank and 0.5 pM', '2. 20 healthy donors', '3. 20 repeating results', 
+           '4. NHP plasma', '5. NHP BAL', '6. 19 PUSH samples', '7. std']
+
+name = '1. blank and 0.5 pM'
+'''   
+os.chdir('~target files location') 
+# 1. blank and 0.5 pM
+# 2. 20 healthy donors
+# 3. 20 repeating results
+# 4. NHP plasma
+# 5. NHP BAL
+# 6. 19 PUSH samples
+# 7. std
+
+scan_range = 20 # Range around standard_max_index and tartget_max_index to extract feature
+min_scan_minute = 10 # We are only interested in range (min_scan_minute, max_scan_minute)
+max_scan_minute = 25 # We are only interested in range (min_scan_minute, max_scan_minute)
+period_second = 60 # Windows to extract features for non-targeted region
+nb_periods = int(np.ceil((max_scan_minute - min_scan_minute)*60/period_second))
+sigpos_lst = []
+signeg_lst = []
+summ_lst = []
+negratio_lst = []
+df_out2 = pd.DataFrame() # initial target intensity 
+df_out3 = pd.DataFrame() # initial internal standard intensity
+df_out4 = pd.DataFrame() # correlation summary
+info = os.listdir()
+info = [i for i in info if i[-4:] == 'mzML']
+
+for k in range(len(info)):
+    samplename = info[k]
+    print(f"{samplename}_is_processing...")
+    run = pymzml.run.Reader(samplename) #f"{samplename}.mzML"
+    standard_scanid = []
+    standard_scantime = []
+    standard_intensity = []
+    standard_tic = []
+    target_scanid = []
+    target_intensity = []
+    target_tic = []
+    for spectrum in run:
+        if spectrum.ms_level == 2:
+            selected_precursor = spectrum.selected_precursors[0]['mz']
+            if np.round(selected_precursor, 2) == 802.37: # Precursor corresponding to Internal Standard
+                standard_scanid.append(spectrum.ID)
+                standard_scantime.append(float(spectrum.get_element_by_path(['scanList', 'scan', 'cvParam'])[0].get('value')))
+                standard_intensity.append(spectrum.i)
+                standard_tic.append(spectrum.TIC)
+            if np.round(selected_precursor, 2) == 797.38: # Precursor corresponding to Target
+                target_scanid.append(spectrum.ID)
+                target_intensity.append(spectrum.i)
+                target_tic.append(spectrum.TIC)
+    
+    standard_tic = np.array(standard_tic)
+    target_tic = np.array(target_tic)
+    standard_scantime = np.array(standard_scantime)
+    standard_max_index = np.argmax(standard_tic[standard_scantime < 20], axis=0) # index corresponding to max TIC of internal standard
+    target_max_index = np.argmax(target_tic, axis=0) # index corresponding to max TIC of target
+    
+    tar_intensity = target_intensity[standard_max_index - 19:standard_max_index + 22]   # selective target integrated intensity
+    std_intensity = standard_intensity[standard_max_index - 19:standard_max_index + 22]
+ 
+    features_transition = []
+    for x in range(41):
+        features_transition.append(tar_intensity[x])
+    df = (pd.DataFrame(features_transition)).iloc[:,]  # target from y5 to y11 within 41 scans
+
+    features_std_transition = []
+    for x in range(41):
+        features_std_transition.append(std_intensity[x])
+    df_std = (pd.DataFrame(features_std_transition)).iloc[:,] # target from y5 to y11 within 41 scans
+    
+    # correlation values
+    tr_comb = []
+    d_corr = []
+    d_pvalue = []
+    for i in range(1,7):
+        tr_comb.append(f'y5_vs_y{5+i}')
+        d_corr.append((scipy.stats.kendalltau(df[0],df[i]))[0])
+        d_pvalue.append((scipy.stats.kendalltau(df[0],df[i]))[1])
+    for i in range(2,7):
+        tr_comb.append(f'y6_vs_y{5+i}')
+        d_corr.append((scipy.stats.kendalltau(df[1],df[i]))[0])
+        d_pvalue.append((scipy.stats.kendalltau(df[1],df[i]))[1])
+    for i in range(3,7):
+        tr_comb.append(f'y7_vs_y{5+i}')
+        d_corr.append((scipy.stats.kendalltau(df[2],df[i]))[0])
+        d_pvalue.append((scipy.stats.kendalltau(df[2],df[i]))[1])
+    for i in range(4,7):
+        tr_comb.append(f'y8_vs_y{5+i}')
+        d_corr.append((scipy.stats.kendalltau(df[3],df[i]))[0])
+        d_pvalue.append((scipy.stats.kendalltau(df[3],df[i]))[1])
+    for i in range(5,7):
+        tr_comb.append(f'y9_vs_y{5+i}')
+        d_corr.append((scipy.stats.kendalltau(df[4],df[i]))[0])
+        d_pvalue.append((scipy.stats.kendalltau(df[4],df[i]))[1])
+    tr_comb.append(f'y10_vs_y{5+i}')
+    d_corr.append((scipy.stats.kendalltau(df[5],df[6]))[0])
+    d_pvalue.append((scipy.stats.kendalltau(df[5],df[6]))[1])
+    
+    d_comb = pd.DataFrame({'comparison':tr_comb, 
+                           'cor':d_corr, 
+                           'pvalue':d_pvalue}) # combine the information of 'comparison, correlation, p-value'
+    d_comb = d_comb.replace(np.nan,0)
+    
+    sigpos = len(d_comb[(d_comb.cor>0)&(d_comb.pvalue<=0.05)])
+    
+    signeg = len(d_comb[(d_comb.cor<0)&(d_comb.pvalue<=0.05)])
+    
+    new_df = d_comb[(d_comb.pvalue<=0.05)]
+    
+    summ = np.sum(new_df['cor'])
+    
+    if sigpos+signeg == 0:
+        negratio = 0
+    else:
+        negratio = signeg/(sigpos+signeg)
+
+    sigpos_lst.append(sigpos)
+    signeg_lst.append(signeg)
+    summ_lst.append(summ)
+    negratio_lst.append(negratio)
+    df = df.rename(columns={0:'y5',1:'y6',2:'y7',3:'y8',4:'y9',5:'y10',6:'y11'})
+    df['ID']= info[k]
+    df_std = df.rename(columns={0:'y5',1:'y6',2:'y7',3:'y8',4:'y9',5:'y10',6:'y11'})
+    df_std['ID']= info[k]
+    d_comb['ID'] = info[k]
+    df_out2 = df_out2.append(df)
+    df_out3 = df_out3.append(df_std)
+    df_out4 = df_out4.append(d_comb)
+    
+    
+    
+    # output1 final needed values
+final_df = pd.DataFrame({'ID':info,
+                         'sig_pos_number':sigpos_lst,
+                         'sig_neg_number':signeg_lst,
+                         'sum_of_abs_corr':summ_lst,
+                         'signeg_ratio':negratio_lst
+                         })
+    
+final_df.to_csv('output1_final_values1.csv')
+df_out2.to_csv('output2_target1.csv')
+df_out3.to_csv('output3_internalstandard1.csv')
+df_out4.to_csv('output4_correlations1.csv')
+print('output has been finished...')  
+
